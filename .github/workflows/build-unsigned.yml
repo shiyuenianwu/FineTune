@@ -1,0 +1,46 @@
+name: build-unsigned
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [zh-hans]
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project FineTune.xcodeproj \
+            -scheme FineTune \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tail -40
+
+      - name: Re-sign uniformly (ad-hoc)
+        run: |
+          APP="$(find build -name 'FineTune.app' -maxdepth 6 | head -1)"
+          echo "built app: $APP"
+          ls -d "$APP" || exit 1
+          # 内嵌框架与主程序签名必须一致，否则 dyld 拒载
+          find "$APP/Contents/Frameworks" -maxdepth 1 -name '*.framework' -print0 2>/dev/null \
+            | xargs -0 -I{} codesign --force --deep --sign - "{}" || true
+          codesign --force --deep --sign - "$APP"
+          echo "--- 签名确认 ---"
+          codesign -dv "$APP" 2>&1 | grep -E "Signature|TeamIdentifier|Identifier=" || true
+          echo "--- 中文条目数 ---"
+          plutil -p "$APP/Contents/Resources/zh-Hans.lproj/Localizable.strings" 2>/dev/null | grep -c "=>" || echo "0（String Catalog 直编进二进制，无 .lproj 属正常）"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FineTune-zh-Hans
+          path: build/Build/Products/Release/FineTune.app
+          if-no-files-found: error
